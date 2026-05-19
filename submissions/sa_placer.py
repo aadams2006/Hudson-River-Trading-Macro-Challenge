@@ -1,13 +1,8 @@
 """
-Optimized Macro Placer - Multi-Strategy Approach
+Greedy macro placer with a few row-ordering heuristics.
 
-Uses multiple greedy placement strategies and picks the best:
-- Height-sorted row packing (classic shelf packing)
-- Width-sorted row packing  
-- Area/density-aware placement
-- Picks the strategy with lowest wirelength
-
-Guaranteed legal placement (zero overlaps) with improved quality.
+It tries several simple packings and keeps the one with the lowest
+estimated wirelength.
 
 Usage:
     uv run evaluate submissions/sa_placer.py
@@ -22,18 +17,10 @@ from macro_place.benchmark import Benchmark
 
 
 class SAPlacerCompetitive:
-    """
-    Macro placement using multi-strategy greedy approach.
-    
-    Features:
-    - Multiple sorting heuristics for row packing
-    - Picks best strategy based on wirelength estimate
-    - Guaranteed legal placement (zero overlaps)
-    - Fast execution
-    """
+    """Greedy macro placer with multiple row-ordering heuristics."""
 
     def __init__(self, seed: int = 42):
-        """Initialize placer with random seed."""
+        """Initialize the placer with a fixed random seed."""
         self.seed = seed
         self.rng = random.Random(seed)
         torch.manual_seed(seed)
@@ -41,12 +28,12 @@ class SAPlacerCompetitive:
     def _estimate_wirelength(
         self, placement: torch.Tensor, benchmark: Benchmark
     ) -> float:
-        """Quick estimate of wirelength using HPWL on nets."""
+        """Quick HPWL estimate on the hard-macro nets."""
         cost = 0.0
         for net_nodes in benchmark.net_nodes:
             if len(net_nodes) < 2:
                 continue
-            # Only consider hard macros
+            # Estimate HPWL on hard macros only.
             hard_nodes = [int(n) for n in net_nodes if int(n) < benchmark.num_hard_macros]
             if len(hard_nodes) < 2:
                 continue
@@ -66,18 +53,18 @@ class SAPlacerCompetitive:
         self, benchmark: Benchmark, sort_key: callable
     ) -> torch.Tensor:
         """
-        Greedy row packing with custom sort key.
+        Greedy row packing with a caller-supplied sort key.
 
         Args:
             benchmark: Benchmark object
-            sort_key: Function that takes index and returns sort value
+            sort_key: Function that takes an index and returns a sort value
 
         Returns:
             Placement tensor
         """
         placement = benchmark.macro_positions.clone()
 
-        # Get movable hard macros
+        # Work on movable hard macros only.
         movable = benchmark.get_movable_mask() & benchmark.get_hard_macro_mask()
         movable_indices = torch.where(movable)[0].tolist()
 
@@ -88,7 +75,7 @@ class SAPlacerCompetitive:
         canvas_w = benchmark.canvas_width
         canvas_h = benchmark.canvas_height
 
-        # Sort by custom key
+        # Order macros with the requested heuristic.
         movable_indices.sort(key=sort_key)
 
         gap = 0.001
@@ -100,20 +87,19 @@ class SAPlacerCompetitive:
             w = sizes[idx, 0].item()
             h = sizes[idx, 1].item()
 
-            # Start new row if doesn't fit
+            # Start a new row when the current one runs out of width.
             if cursor_x + w > canvas_w:
                 cursor_x = 0.0
                 cursor_y += row_height + gap
                 row_height = 0.0
 
-            # Check vertical space
+            # Fall back to the origin if we run out of height.
             if cursor_y + h > canvas_h:
-                # Fallback
                 placement[idx, 0] = w / 2
                 placement[idx, 1] = h / 2
                 continue
 
-            # Place macro
+            # Store the macro center.
             placement[idx, 0] = cursor_x + w / 2
             placement[idx, 1] = cursor_y + h / 2
 
@@ -123,7 +109,7 @@ class SAPlacerCompetitive:
         return placement
 
     def _get_net_degree(self, benchmark: Benchmark) -> torch.Tensor:
-        """Compute number of nets connected to each macro."""
+        """Compute the number of nets attached to each macro."""
         degree = torch.zeros(benchmark.num_macros, dtype=torch.long)
         for net_nodes in benchmark.net_nodes:
             for node in net_nodes:
@@ -134,7 +120,7 @@ class SAPlacerCompetitive:
 
     def place(self, benchmark: Benchmark) -> torch.Tensor:
         """
-        Generate placement using best strategy.
+        Generate a placement by picking the best row-ordering heuristic.
 
         Args:
             benchmark: Benchmark object with circuit data
@@ -145,21 +131,21 @@ class SAPlacerCompetitive:
         sizes = benchmark.macro_sizes
         net_degree = self._get_net_degree(benchmark)
 
-        # Define multiple sorting strategies
+        # Candidate row-ordering heuristics.
         strategies = [
-            # Height descending (classic shelf packing)
+            # Height first.
             lambda i: -sizes[i, 1].item(),
-            # Width descending
+            # Width first.
             lambda i: -sizes[i, 0].item(),
-            # Area descending
+            # Area first.
             lambda i: -(sizes[i, 0] * sizes[i, 1]).item(),
-            # Height/width ratio (prefer square-ish first)
+            # Prefer taller blocks before wider ones.
             lambda i: -(sizes[i, 1] / (sizes[i, 0] + 1e-6)).item(),
-            # Net degree descending (high connectivity first)
+            # Higher net degree first.
             lambda i: -net_degree[i].item(),
         ]
 
-        # Try each strategy and pick best by wirelength
+        # Try each ordering and keep the lowest HPWL estimate.
         best_placement = None
         best_cost = float('inf')
 
@@ -171,14 +157,14 @@ class SAPlacerCompetitive:
                 if cost < best_cost:
                     best_cost = cost
                     best_placement = placement.clone()
-            except:
+            except Exception:
                 continue
 
-        # Use best placement found
+        # Default to the input placement if every heuristic fails.
         if best_placement is None:
             best_placement = benchmark.macro_positions.clone()
 
-        # Restore fixed macro positions
+        # Fixed macros stay where the benchmark puts them.
         fixed_mask = benchmark.macro_fixed
         best_placement[fixed_mask] = benchmark.macro_positions[fixed_mask]
 

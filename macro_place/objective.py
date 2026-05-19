@@ -1,8 +1,8 @@
 """
-Proxy cost computation using PlacementCost's ground truth evaluator.
+Proxy cost computation using PlacementCost's ground-truth evaluator.
 
-Wraps PlacementCost methods to compute wirelength, density, and congestion costs.
-Also computes overlap metrics for validation and analysis.
+Wraps PlacementCost methods to compute wirelength, density, and congestion
+costs. Also computes overlap metrics for validation and analysis.
 """
 
 import torch
@@ -13,18 +13,18 @@ from macro_place._plc import PlacementCost
 from macro_place.benchmark import Benchmark
 
 
-# Monkey-patch PlacementCost to fix boundary bug in __get_grid_cell_location
+# Patch PlacementCost so boundary lookups clamp into the grid.
 _original_get_grid_cell_location = PlacementCost._PlacementCost__get_grid_cell_location
 
 
 def _patched_get_grid_cell_location(self, x_pos, y_pos):
-    """Fixed version with bounds clamping."""
+    """Version of the grid lookup with bounds clamping."""
     self.grid_width = float(self.width / self.grid_col)
     self.grid_height = float(self.height / self.grid_row)
     row = math.floor(y_pos / self.grid_height)
     col = math.floor(x_pos / self.grid_width)
 
-    # Clamp to valid range to fix boundary bug
+    # Clamp the lookup into the valid grid range.
     row = max(0, min(row, self.grid_row - 1))
     col = max(0, min(col, self.grid_col - 1))
 
@@ -49,10 +49,10 @@ def compute_overlap_metrics(
     Returns:
         Dictionary with:
             - overlap_count: Number of overlapping macro pairs
-            - total_overlap_area: Total area of all overlaps (μm²)
-            - max_overlap_area: Largest single overlap area (μm²)
+            - total_overlap_area: Total area of all overlaps (um^2)
+            - max_overlap_area: Largest single overlap area (um^2)
             - num_macros_with_overlaps: Number of macros involved in at least one overlap
-            - overlap_ratio: Fraction of macros with overlaps (0.0 = no overlaps, 1.0 = all overlap)
+            - overlap_ratio: Fraction of macros with overlaps
     """
     num_macros = placement.shape[0]
 
@@ -65,33 +65,33 @@ def compute_overlap_metrics(
             "overlap_ratio": 0.0,
         }
 
-    # Extract positions and sizes
-    positions = placement.cpu().detach().numpy()  # [N, 2]
-    widths = benchmark.macro_sizes[:, 0].cpu().numpy()  # [N]
-    heights = benchmark.macro_sizes[:, 1].cpu().numpy()  # [N]
+    # Pull positions and sizes into NumPy.
+    positions = placement.cpu().detach().numpy()
+    widths = benchmark.macro_sizes[:, 0].cpu().numpy()
+    heights = benchmark.macro_sizes[:, 1].cpu().numpy()
 
     overlap_count = 0
     total_overlap_area = 0.0
     max_overlap_area = 0.0
     macros_with_overlaps = set()
 
-    # Check hard macro pairs only for overlap (soft macros naturally overlap)
-    num_hard = getattr(benchmark, 'num_hard_macros', num_macros)
+    # Only check hard-macro pairs; soft macros can overlap by design.
+    num_hard = getattr(benchmark, "num_hard_macros", num_macros)
     for i in range(num_hard):
         for j in range(i + 1, num_hard):
-            # Calculate center-to-center distances
+            # Center-to-center distances.
             dx = abs(positions[i, 0] - positions[j, 0])
             dy = abs(positions[i, 1] - positions[j, 1])
 
-            # Minimum separation for non-overlap (sum of half-widths/heights)
+            # Minimum separation for a legal placement.
             min_sep_x = (widths[i] + widths[j]) / 2.0
             min_sep_y = (heights[i] + heights[j]) / 2.0
 
-            # Calculate overlap amounts in each dimension
+            # Overlap depth in each dimension.
             overlap_x = max(0.0, min_sep_x - dx)
             overlap_y = max(0.0, min_sep_y - dy)
 
-            # Overlap occurs only if BOTH x and y overlap
+            # A pair overlaps only when both dimensions overlap.
             if overlap_x > 0 and overlap_y > 0:
                 overlap_area = overlap_x * overlap_y
                 overlap_count += 1
@@ -119,50 +119,36 @@ def compute_proxy_cost(
     weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
     """
-    Compute proxy cost using PlacementCost's ground truth evaluator.
+    Compute proxy cost using PlacementCost's ground-truth evaluator.
 
     Args:
         placement: [num_macros, 2] tensor of (x, y) positions
         benchmark: Benchmark object with circuit data
-        plc: PlacementCost object (contains all netlist/placement data)
-        weights: Optional cost weights {
-            'wirelength': 1.0,
-            'density': 0.5,
-            'congestion': 0.5
-        }
+        plc: PlacementCost object
+        weights: Optional cost weights
 
     Returns:
-        {
-            'proxy_cost': float,
-            'wirelength_cost': float,
-            'density_cost': float,
-            'congestion_cost': float,
-            'overlap_count': int,
-            'total_overlap_area': float,
-            'max_overlap_area': float,
-            'num_macros_with_overlaps': int,
-            'overlap_ratio': float,
-        }
+        Dictionary with the proxy cost terms and overlap metrics.
     """
     if weights is None:
         weights = {"wirelength": 1.0, "density": 0.5, "congestion": 0.5}
 
-    # Set placement in PlacementCost object (if different from current)
+    # Push the candidate placement into PlacementCost.
     _set_placement(plc, placement, benchmark)
 
-    # Compute costs using PlacementCost methods
+    # Read the proxy cost terms from PlacementCost.
     wirelength_cost = plc.get_cost()
     density_cost = plc.get_density_cost()
-    congestion_cost = plc.get_congestion_cost()  # Fixed with monkey-patch above
+    congestion_cost = plc.get_congestion_cost()  # Uses the clamped lookup above.
 
-    # Weighted sum (matching ISPD 2023 paper convention)
+    # Weighted sum used by the proxy objective.
     proxy = (
         weights["wirelength"] * wirelength_cost
         + weights["density"] * density_cost
         + weights["congestion"] * congestion_cost
     )
 
-    # Compute overlap metrics
+    # Collect overlap stats for validation and reporting.
     overlap_metrics = compute_overlap_metrics(placement, benchmark)
 
     return {
@@ -170,44 +156,44 @@ def compute_proxy_cost(
         "wirelength_cost": wirelength_cost,
         "density_cost": density_cost,
         "congestion_cost": congestion_cost,
-        **overlap_metrics,  # Add all overlap metrics
+        **overlap_metrics,
     }
 
 
 def _set_placement(plc: PlacementCost, placement: torch.Tensor, benchmark: Benchmark):
     """
-    Set macro positions in PlacementCost object.
+    Set macro positions in PlacementCost.
 
     Args:
         plc: PlacementCost object
         placement: [num_macros, 2] tensor of (x, y) positions
-        benchmark: Benchmark object with macro indices mapping
+        benchmark: Benchmark object with macro index mappings
     """
-    # Convert tensor to numpy for PlacementCost API
+    # Convert the tensor once for the PlacementCost API.
     placement_np = placement.cpu().numpy()
 
-    # Build macro_name -> [pin_indices] lookup (cached on plc)
-    if not hasattr(plc, '_macro_pin_map'):
+    # Cache macro_name -> [pin_indices] on the plc object.
+    if not hasattr(plc, "_macro_pin_map"):
         pin_map = {}
         for idx, mod in enumerate(plc.modules_w_pins):
-            if mod.get_type() == 'MACRO_PIN' and hasattr(mod, 'get_macro_name'):
+            if mod.get_type() == "MACRO_PIN" and hasattr(mod, "get_macro_name"):
                 name = mod.get_macro_name()
                 if name not in pin_map:
                     pin_map[name] = []
                 pin_map[name].append(idx)
         plc._macro_pin_map = pin_map
 
-    # Set hard macro positions (indices [0, num_hard))
+    # Update hard macro positions first.
     for i, macro_idx in enumerate(benchmark.hard_macro_indices):
         x, y = placement_np[i]
         node = plc.modules_w_pins[macro_idx]
         node.set_pos(x, y)
-        # Update pin positions (pin.get_pos() caches stale coordinates)
+        # Refresh pin positions because pin.get_pos() can cache stale values.
         for pin_idx in plc._macro_pin_map.get(node.get_name(), []):
             pin = plc.modules_w_pins[pin_idx]
             pin.set_pos(x + pin.x_offset, y + pin.y_offset)
 
-    # Set soft macro positions (indices [num_hard, num_macros))
+    # Then update the soft macro positions.
     num_hard = benchmark.num_hard_macros
     for i, macro_idx in enumerate(benchmark.soft_macro_indices):
         x, y = placement_np[num_hard + i]
@@ -217,11 +203,10 @@ def _set_placement(plc: PlacementCost, placement: torch.Tensor, benchmark: Bench
             pin = plc.modules_w_pins[pin_idx]
             pin.set_pos(x + pin.x_offset, y + pin.y_offset)
 
-    # Reinitialize congestion arrays with correct size
-    # This is needed because the arrays may be incorrectly sized
+    # Resize the congestion arrays if PlacementCost left them stale.
     _ensure_congestion_arrays(plc)
 
-    # Mark that costs need to be recomputed
+    # Force PlacementCost to recompute all derived costs.
     plc.FLAG_UPDATE_WIRELENGTH = True
     plc.FLAG_UPDATE_DENSITY = True
     plc.FLAG_UPDATE_CONGESTION = True
@@ -229,7 +214,7 @@ def _set_placement(plc: PlacementCost, placement: torch.Tensor, benchmark: Bench
 
 def _ensure_congestion_arrays(plc: PlacementCost):
     """
-    Ensure congestion arrays are properly sized for current grid.
+    Ensure congestion arrays are sized for the current grid.
 
     Args:
         plc: PlacementCost object
@@ -238,7 +223,7 @@ def _ensure_congestion_arrays(plc: PlacementCost):
     current_size = len(plc.H_routing_cong)
 
     if current_size != expected_size:
-        # Reinitialize with correct size
+        # Reinitialize with the expected size.
         plc.V_routing_cong = [0] * expected_size
         plc.H_routing_cong = [0] * expected_size
         plc.V_macro_routing_cong = [0] * expected_size

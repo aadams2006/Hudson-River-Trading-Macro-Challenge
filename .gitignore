@@ -72,6 +72,7 @@ checkpoints/
 tmp/
 temp/
 *.tmp
+
 # MacroPlacement evaluator (submodule)
 # Keep the submodule but ignore unnecessary files
 external/MacroPlacement/Testcases/
@@ -91,3 +92,5 @@ docs/
 output/
 BENCHMARK_EVALUATION_RESULTS.md
 NETLIST_CLEANING_SUMMARY.md
+SUBMISSION_CHECKLIST.txt
+TECHNICAL_REPORT.txt

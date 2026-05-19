@@ -19,70 +19,69 @@ class Benchmark:
 
     Tensors contain both hard macros (indices [0, num_hard_macros)) and
     soft macros (indices [num_hard_macros, num_macros)). Hard macros are
-    the primary optimization targets; soft macros are standard cell clusters
+    the primary optimization targets; soft macros are standard-cell clusters
     that should be co-optimized for best results.
     """
 
-    # Core data
+    # Core metadata.
     name: str
 
-    # Canvas
+    # Canvas bounds.
     canvas_width: float
     canvas_height: float
 
-    # Macros (hard + soft, hard macros first)
+    # Macros (hard first, then soft).
     num_macros: int
     macro_positions: torch.Tensor  # [num_macros, 2] - (x, y) centers
     macro_sizes: torch.Tensor  # [num_macros, 2] - (width, height)
     macro_fixed: torch.Tensor  # [num_macros] - bool, True if fixed
     macro_names: List[str]  # [num_macros] - names for debugging
 
-    # Nets (hypergraph connectivity)
+    # Nets.
     num_nets: int
-    net_nodes: List[torch.Tensor]  # List of [nodes_in_net_i] - node indices
-    net_weights: torch.Tensor  # [num_nets] - net weights (default 1.0)
+    net_nodes: List[torch.Tensor]  # List of [nodes_in_net_i] node indices
+    net_weights: torch.Tensor  # [num_nets] net weights (default 1.0)
 
-    # Grid (for metrics)
+    # Routing grid used by the proxy metrics.
     grid_rows: int
     grid_cols: int
 
-    # I/O ports (pins on the chip boundary)
+    # I/O ports on the chip boundary.
     port_positions: torch.Tensor = field(default_factory=lambda: torch.zeros(0, 2))  # [num_ports, 2]
 
-    # Hard macro pin offsets (relative to macro center)
-    # List of [num_pins_i, 2] tensors, one per hard macro (indices [0, num_hard_macros))
+    # Hard-macro pin offsets relative to macro centers.
+    # One [num_pins_i, 2] tensor per hard macro.
     macro_pin_offsets: List[torch.Tensor] = field(default_factory=list)
 
-    # Pin-level net connectivity (optional; empty list if not populated)
+    # Optional pin-level net connectivity.
     # Each net_pin_nodes[i] is an int64 tensor of shape [num_pins_in_net_i, 2] where:
-    #   column 0 = owner index:
+    #   column 0 = owner index
     #     - hard macros:  [0, num_hard_macros)
     #     - soft macros:  [num_hard_macros, num_macros)
     #     - I/O ports:    [num_macros, num_macros + num_ports)
-    #   column 1 = pin index within that owner:
+    #   column 1 = pin index within that owner
     #     - hard macro:   index into macro_pin_offsets[owner]
     #     - soft macro:   always 0 (pins at macro center; soft macros carry no offsets)
     #     - port:         always 0 (port is a single point at port_positions[owner-num_macros])
-    # Unlike net_nodes (which dedups to per-macro granularity), this preserves
-    # every pin endpoint — multiple pins on the same macro appear as multiple rows.
-    # Needed by placers computing pin-level HPWL for differentiable loss.
+    # Unlike net_nodes, this keeps every pin endpoint.
+    # Multiple pins on the same macro therefore appear as multiple rows.
     net_pin_nodes: List[torch.Tensor] = field(default_factory=list)
 
-    # Routing parameters
+    # Routing parameters.
     hroutes_per_micron: float = 11.285  # Horizontal routing tracks per micron
     vroutes_per_micron: float = 12.605  # Vertical routing tracks per micron
 
-    # PlacementCost mapping (tensor index → PlacementCost module index)
+    # Mapping from tensor indices back to PlacementCost indices.
     hard_macro_indices: List[int] = field(default_factory=list)
     soft_macro_indices: List[int] = field(default_factory=list)
 
-    # Counts
+    # Counts.
     num_hard_macros: int = 0
     num_soft_macros: int = 0
 
     def __post_init__(self):
         """Validate tensor shapes and set counts."""
-        # Backwards compat: if num_hard_macros not set, all macros are hard
+        # Backward compatibility for older saved benchmarks.
         if self.num_hard_macros == 0 and self.num_soft_macros == 0:
             self.num_hard_macros = self.num_macros
             self.num_soft_macros = 0
@@ -116,7 +115,7 @@ class Benchmark:
         )
 
     def save(self, path: str):
-        """Save benchmark to .pt file."""
+        """Save benchmark to a .pt file."""
         torch.save(
             {
                 "name": self.name,
@@ -147,9 +146,9 @@ class Benchmark:
 
     @classmethod
     def load(cls, path: str) -> "Benchmark":
-        """Load benchmark from .pt file."""
+        """Load a benchmark from a .pt file."""
         data = torch.load(path, weights_only=False)
-        # Backwards compat: old .pt files lack soft macro fields
+        # Backward compatibility for older .pt files.
         if "num_hard_macros" not in data:
             data["num_hard_macros"] = data["num_macros"]
             data["num_soft_macros"] = 0
@@ -164,17 +163,17 @@ class Benchmark:
         return cls(**data)
 
     def get_movable_mask(self) -> torch.Tensor:
-        """Return mask of movable macros (not fixed)."""
+        """Return a mask of movable macros."""
         return ~self.macro_fixed
 
     def get_hard_macro_mask(self) -> torch.Tensor:
-        """Return mask that is True for hard macros (first num_hard_macros entries)."""
+        """Return a mask that is True for hard macros."""
         mask = torch.zeros(self.num_macros, dtype=torch.bool)
         mask[: self.num_hard_macros] = True
         return mask
 
     def get_soft_macro_mask(self) -> torch.Tensor:
-        """Return mask that is True for soft macros."""
+        """Return a mask that is True for soft macros."""
         mask = torch.zeros(self.num_macros, dtype=torch.bool)
         mask[self.num_hard_macros :] = True
         return mask

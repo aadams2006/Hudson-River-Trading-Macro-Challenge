@@ -56,7 +56,7 @@ def test_validate_placement(ibm01):
     """Validation function runs without errors on default placement."""
     benchmark, plc = ibm01
     is_valid, violations = validate_placement(benchmark.macro_positions, benchmark)
-    # Default placement may have overlaps — we just check the function works
+    # Default placements can overlap; this just checks the function runs.
     assert isinstance(is_valid, bool)
     assert isinstance(violations, list)
 
@@ -71,18 +71,18 @@ def test_net_pin_nodes(ibm01):
     for net_id, (net_pins, net_owners) in enumerate(
         zip(benchmark.net_pin_nodes, benchmark.net_nodes)
     ):
-        # Shape: [pins_in_net, 2] — columns are (owner_idx, pin_slot)
+        # Shape [pins_in_net, 2]: columns are (owner_idx, pin_slot).
         assert net_pins.ndim == 2 and net_pins.shape[1] == 2, (
             f"net {net_id}: net_pins shape {net_pins.shape}"
         )
 
-        # Dedup+sort of owner column must match existing net_nodes exactly
+        # The deduped owner column should match net_nodes.
         owners_sorted = torch.unique(net_pins[:, 0]).sort().values
         assert torch.equal(owners_sorted, net_owners), (
             f"net {net_id}: owners {owners_sorted.tolist()} != net_nodes {net_owners.tolist()}"
         )
 
-        # Pin slots must index into macro_pin_offsets[owner] for hard macros
+        # Hard-macro pin slots should point into macro_pin_offsets[owner].
         for owner, slot in net_pins.tolist():
             if owner < benchmark.num_hard_macros:
                 num_pins_on_macro = benchmark.macro_pin_offsets[owner].shape[0]

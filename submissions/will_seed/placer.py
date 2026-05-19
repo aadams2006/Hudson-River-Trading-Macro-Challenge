@@ -1,10 +1,10 @@
 """
-Will's Seed v4 — Minimal Legalization + GPU Refinement
+Will's seed placer.
 
-1. Legalize initial placement with minimum displacement
-2. GPU gradient refinement: reduce wirelength while maintaining no-overlap
-   via projected gradient (undo any step that creates overlap)
-3. Soft macro FD at the end
+Workflow:
+1. Legalize the starting hard-macro placement with small moves.
+2. Run a simulated-annealing pass that rejects overlapping moves.
+3. Leave soft macros at their original coordinates.
 
 Usage:
     uv run evaluate submissions/will_seed/placer.py
@@ -85,22 +85,21 @@ class WillSeedPlacer:
             edges = torch.zeros(0, 2, dtype=torch.long)
             edge_weights = torch.zeros(0)
 
-        # Step 1: Legalize initial hard macro placement
+        # Legalize hard macros before refinement.
         pos = benchmark.macro_positions[:n_hard].numpy().copy().astype(np.float64)
         pos = self._legalize(pos, movable, sizes_np, half_w, half_h, cw, ch, n_hard)
 
-        # Step 2: SA refinement with overlap rejection (fast numpy)
+        # Refine with SA while rejecting overlapping moves.
         if len(edges) > 0:
             pos = self._sa_refine(pos, edges.numpy(), edge_weights.numpy(),
                                    movable, sizes_np, half_w, half_h, cw, ch, n_hard, plc, benchmark)
 
-        # Step 3: Build full placement + soft macro FD
+        # Rebuild the full placement tensor.
         full_pos = benchmark.macro_positions.clone()
         full_pos[:n_hard] = torch.tensor(pos, dtype=torch.float32)
 
-        # Keep soft macros at initial positions — they were already optimized
-        # for the initial hard macro layout and minimal legalization preserves this
-
+        # Leave soft macros where the benchmark starts them.
+        # The hard-macro legalization pass should not churn the soft placement.
         return full_pos
 
     def _sa_refine(self, pos, edges, edge_weights, movable, sizes, half_w, half_h, cw, ch, n, plc, benchmark):
@@ -113,7 +112,7 @@ class WillSeedPlacer:
         sep_x = (sizes[:, 0:1] + sizes[:, 0:1].T) / 2
         sep_y = (sizes[:, 1:2] + sizes[:, 1:2].T) / 2
 
-        # Build neighbor lists
+        # Build adjacency lists from the extracted net graph.
         neighbors = [[] for _ in range(n)]
         for i, j in edges:
             neighbors[i].append(j)
@@ -149,12 +148,12 @@ class WillSeedPlacer:
             old_x, old_y = pos[i, 0], pos[i, 1]
 
             if move < 0.5:
-                # SHIFT
+                # Random shift.
                 shift = T * (0.3 + 0.7 * (1 - frac))
                 pos[i, 0] = np.clip(pos[i, 0] + random.gauss(0, shift), half_w[i], cw - half_w[i])
                 pos[i, 1] = np.clip(pos[i, 1] + random.gauss(0, shift), half_h[i], ch - half_h[i])
             elif move < 0.8:
-                # SWAP
+                # Swap two movable macros.
                 if neighbors[i] and random.random() < 0.7:
                     cands = [j for j in neighbors[i] if movable[j]]
                     j = random.choice(cands) if cands else random.choice(movable_idx)
@@ -166,7 +165,7 @@ class WillSeedPlacer:
                     pos[i, 1] = np.clip(old_jy, half_h[i], ch - half_h[i])
                     pos[j, 0] = np.clip(old_x, half_w[j], cw - half_w[j])
                     pos[j, 1] = np.clip(old_y, half_h[j], ch - half_h[j])
-                    # Check both macros
+                    # Recheck both updated macros.
                     if check_single_overlap(i) or check_single_overlap(j):
                         pos[i, 0] = old_x; pos[i, 1] = old_y
                         pos[j, 0] = old_jx; pos[j, 1] = old_jy
@@ -182,14 +181,14 @@ class WillSeedPlacer:
                         pos[j, 0] = old_jx; pos[j, 1] = old_jy
                     continue
             else:
-                # MOVE TOWARD NEIGHBOR
+                # Pull the macro toward one of its neighbors.
                 if neighbors[i]:
                     j = random.choice(neighbors[i])
                     alpha = random.uniform(0.05, 0.3)
                     pos[i, 0] = np.clip(pos[i, 0]+alpha*(pos[j, 0]-pos[i, 0]), half_w[i], cw-half_w[i])
                     pos[i, 1] = np.clip(pos[i, 1]+alpha*(pos[j, 1]-pos[i, 1]), half_h[i], ch-half_h[i])
 
-            # Single macro overlap check - O(N)
+            # Recheck the moved macro against the rest of the placement.
             if check_single_overlap(i):
                 pos[i, 0] = old_x; pos[i, 1] = old_y
                 continue
